@@ -1,21 +1,22 @@
 use axum::{
-    Router,
     body::Bytes,
-    extract::{Path, State, WebSocketUpgrade, ws::Message},
+    extract::{ws::Message, Path, State, WebSocketUpgrade},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     routing::{get, post},
+    Router,
 };
 use clap::Parser;
 use futures::{sink::SinkExt, stream::StreamExt};
 use reqwest::header;
 use serde::Serialize;
+use std::env;
 use std::{collections::VecDeque, sync::Arc};
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{broadcast, RwLock};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tsp_sdk::{
-    AsyncStore, OwnedVid, ReceivedTspMessage, VerifiedVid, cesr, definitions::Digest, transport,
-    vid::vid_to_did_document,
+    cesr, definitions::Digest, transport, vid::vid_to_did_document, AsyncStore, OwnedVid,
+    ReceivedTspMessage, VerifiedVid,
 };
 use url::Url;
 
@@ -94,18 +95,59 @@ impl IntermediaryState {
 
 const MAX_LOG_LEN: usize = 10;
 
+use tracing::Subscriber;
+use tracing_subscriber::layer::{Context, Layer};
+use tracing_subscriber::registry::LookupSpan;
+
+#[derive(Default)]
+struct StringVisitor {
+    output: String,
+}
+
+impl tracing::field::Visit for StringVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.output = format!("{value:?}"); // Debug output, with quotes
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "message" {
+            self.output = format!("{value:?}");
+        }
+    }
+}
+
+pub struct VarLayer {
+    pub var: String,
+}
+
+impl<S> Layer<S> for VarLayer
+where
+    S: Subscriber + for<'span> LookupSpan<'span>,
+{
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+        let mut visitor = StringVisitor::default();
+        event.record(&mut visitor);
+        println!("[{}]: {}", &self.var, visitor.output);
+    }
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .without_time()
-                .with_ansi(false),
-        )
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "demo_intermediary=trace,tsp=trace".into()),
-        )
+        // .with(
+        //     tracing_subscriber::fmt::layer()
+        //         .without_time()
+        //         .with_ansi(false)
+        // )
+        .with(VarLayer {
+            var: env::var("INTERMEDIARY_NAME").unwrap_or_default(),
+        })
+        // .with(
+        //     tracing_subscriber::EnvFilter::try_from_default_env()
+        //         .unwrap_or_else(|_| "demo_intermediary=trace,tsp=trace".into()),
+        // )
         .init();
 
     let args = Cli::parse();
